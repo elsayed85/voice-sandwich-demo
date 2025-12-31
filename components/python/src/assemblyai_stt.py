@@ -87,6 +87,7 @@ class AssemblyAISTT:
 
                                 if turn_is_formatted:
                                     if transcript:
+                                        print(f'[AssemblyAI STT] Final transcript: "{transcript}"')
                                         yield STTOutputEvent.create(transcript)
                                     # Reset speech start flag for next utterance
                                     self._speech_start_signaled = False
@@ -103,8 +104,7 @@ class AssemblyAISTT:
                                             self.on_speech_start()
 
                             elif message_type == "Termination":
-                                # no-op
-                                pass
+                                print("[AssemblyAI STT] Received termination message")
                             else:
                                 if "error" in message:
                                     print(f"AssemblyAISTT error: {message['error']}")
@@ -112,12 +112,18 @@ class AssemblyAISTT:
                         except json.JSONDecodeError as e:
                             print(f"[DEBUG] AssemblyAISTT JSON decode error: {e}")
                             continue
-                except websockets.exceptions.ConnectionClosed:
-                    print("AssemblyAISTT: WebSocket connection closed")
+                except websockets.exceptions.ConnectionClosed as e:
+                    print(f"[AssemblyAI STT] WebSocket closed: code={e.code}, reason={e.reason or 'none'}")
 
     async def send_audio(self, audio_chunk: bytes) -> None:
-        ws = await self._ensure_connection()
-        await ws.send(audio_chunk)
+        try:
+            ws = await self._ensure_connection()
+            if ws.close_code is None:
+                await ws.send(audio_chunk)
+            else:
+                print(f"[AssemblyAI STT] Cannot send audio, WebSocket closed with code: {ws.close_code}")
+        except Exception as e:
+            print(f"[AssemblyAI STT] Error sending audio: {e}")
 
     async def close(self) -> None:
         if self._ws and self._ws.close_code is None:

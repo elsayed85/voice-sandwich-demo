@@ -53,6 +53,7 @@ export class AssemblyAISTT {
           } else if (message.type === "Turn") {
             if (message.turn_is_formatted) {
               if (message.transcript) {
+                console.log(`[AssemblyAI STT] Final transcript: "${message.transcript}"`);
                 this._bufferIterator.push({ type: "stt_output", transcript: message.transcript, ts: Date.now() });
               }
               // Reset speech start flag for next utterance
@@ -66,7 +67,7 @@ export class AssemblyAISTT {
               }
             }
           } else if (message.type === "Termination") {
-            // no-op
+            console.log("[AssemblyAI STT] Received termination message");
           } else if (message.type === "Error") {
             throw new Error(message.error);
           }
@@ -81,7 +82,8 @@ export class AssemblyAISTT {
         reject(error);
       });
 
-      ws.on("close", () => {
+      ws.on("close", (code, reason) => {
+        console.log(`[AssemblyAI STT] WebSocket closed: code=${code}, reason=${reason?.toString() || "none"}`);
         this._connectionPromise = null;
       });
     });
@@ -101,8 +103,16 @@ export class AssemblyAISTT {
   }
 
   async sendAudio(buffer: Uint8Array): Promise<void> {
-    const conn = await this._connection;
-    conn.send(buffer);
+    try {
+      const conn = await this._connection;
+      if (conn.readyState === WebSocket.OPEN) {
+        conn.send(buffer);
+      } else {
+        console.warn(`[AssemblyAI STT] Cannot send audio, WebSocket state: ${conn.readyState}`);
+      }
+    } catch (error) {
+      console.error("[AssemblyAI STT] Error sending audio:", error);
+    }
   }
 
   async *receiveEvents(): AsyncGenerator<VoiceAgentEvent.STTEvent> {
