@@ -3,10 +3,42 @@ import { writableIterator } from "../utils";
 import type { AssemblyAISTTMessage } from "./api-types";
 import type { VoiceAgentEvent } from "../types";
 
+/**
+ * Endpointing configuration for turn detection.
+ * Controls how the STT detects when the user has finished speaking.
+ */
+export interface EndpointingConfig {
+  /**
+   * Confidence threshold for semantic end-of-turn detection (0-1).
+   * Lower = more aggressive (faster responses), Higher = more conservative.
+   * @default 0.4
+   */
+  endOfTurnConfidenceThreshold?: number;
+
+  /**
+   * Minimum silence duration (ms) when confident about end of turn.
+   * Lower = faster response when STT is confident the user finished.
+   * @default 400
+   */
+  minEndOfTurnSilenceWhenConfident?: number;
+
+  /**
+   * Maximum silence duration (ms) before forcing end-of-turn.
+   * Acts as a fallback when semantic detection isn't confident.
+   * @default 1280
+   */
+  maxTurnSilence?: number;
+}
+
 interface AssemblyAISTTOptions {
   apiKey?: string;
   sampleRate?: number;
   formatTurns?: boolean;
+  /**
+   * Endpointing configuration for turn detection.
+   * Controls how aggressively the STT detects end of speech.
+   */
+  endpointing?: EndpointingConfig;
   /**
    * Callback when speech is detected (partial transcript received).
    * Useful for implementing barge-in to interrupt TTS.
@@ -18,6 +50,7 @@ export class AssemblyAISTT {
   apiKey: string;
   sampleRate: number;
   formatTurns: boolean;
+  endpointing: EndpointingConfig;
   onSpeechStart?: () => void;
 
   protected _bufferIterator = writableIterator<VoiceAgentEvent.STTEvent>();
@@ -35,6 +68,17 @@ export class AssemblyAISTT {
         sample_rate: this.sampleRate.toString(),
         format_turns: this.formatTurns.toString().toLowerCase(),
       });
+
+      // Add endpointing configuration if provided
+      if (this.endpointing.endOfTurnConfidenceThreshold !== undefined) {
+        params.set("end_of_turn_confidence_threshold", this.endpointing.endOfTurnConfidenceThreshold.toString());
+      }
+      if (this.endpointing.minEndOfTurnSilenceWhenConfident !== undefined) {
+        params.set("min_end_of_turn_silence_when_confident", this.endpointing.minEndOfTurnSilenceWhenConfident.toString());
+      }
+      if (this.endpointing.maxTurnSilence !== undefined) {
+        params.set("max_turn_silence", this.endpointing.maxTurnSilence.toString());
+      }
 
       const url = `wss://streaming.assemblyai.com/v3/ws?${params.toString()}`;
       const ws = new WebSocket(url, {
@@ -94,7 +138,8 @@ export class AssemblyAISTT {
   constructor(options: AssemblyAISTTOptions) {
     this.apiKey = options.apiKey || process.env.ASSEMBLYAI_API_KEY || "";
     this.sampleRate = options.sampleRate || 16000;
-    this.formatTurns = options.formatTurns || true;
+    this.formatTurns = options.formatTurns ?? true;
+    this.endpointing = options.endpointing || {};
     this.onSpeechStart = options.onSpeechStart;
 
     if (!this.apiKey) {

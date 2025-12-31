@@ -15,7 +15,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import interrupt, Command
 from starlette.staticfiles import StaticFiles
 
-from assemblyai_stt import AssemblyAISTT
+from assemblyai_stt import AssemblyAISTT, EndpointingConfig
 from cartesia_tts import CartesiaTTS
 from events import (
     AgentChunkEvent,
@@ -165,7 +165,21 @@ def create_stt_stream(
             # Queue a clear_audio event to be emitted
             clear_audio_queue.put_nowait(ClearAudioEvent.create())
 
-        stt = AssemblyAISTT(sample_rate=16000, on_speech_start=handle_speech_start)
+        # Endpointing configuration - tune these for your use case:
+        # - Lower values = faster responses but may cut off users mid-thought
+        # - Higher values = allows natural pauses but slower responses
+        stt = AssemblyAISTT(
+            sample_rate=16000,
+            on_speech_start=handle_speech_start,
+            endpointing=EndpointingConfig(
+                # Confidence threshold for semantic end-of-turn (0-1). Default: 0.4
+                end_of_turn_confidence_threshold=0.5,
+                # Min silence (ms) when confident user finished. Default: 400
+                min_end_of_turn_silence_when_confident=300,
+                # Max silence (ms) before forcing end-of-turn. Default: 1280
+                max_turn_silence=1200,
+            ),
+        )
 
         async def send_audio():
             """

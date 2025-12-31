@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 import json
 import os
+from dataclasses import dataclass
 from typing import AsyncIterator, Callable, Optional
 from urllib.parse import urlencode
 
@@ -21,12 +22,42 @@ from websockets.client import WebSocketClientProtocol
 from events import STTChunkEvent, STTEvent, STTOutputEvent
 
 
+@dataclass
+class EndpointingConfig:
+    """
+    Endpointing configuration for turn detection.
+    Controls how the STT detects when the user has finished speaking.
+    """
+
+    end_of_turn_confidence_threshold: Optional[float] = None
+    """
+    Confidence threshold for semantic end-of-turn detection (0-1).
+    Lower = more aggressive (faster responses), Higher = more conservative.
+    Default: 0.4
+    """
+
+    min_end_of_turn_silence_when_confident: Optional[int] = None
+    """
+    Minimum silence duration (ms) when confident about end of turn.
+    Lower = faster response when STT is confident the user finished.
+    Default: 400
+    """
+
+    max_turn_silence: Optional[int] = None
+    """
+    Maximum silence duration (ms) before forcing end-of-turn.
+    Acts as a fallback when semantic detection isn't confident.
+    Default: 1280
+    """
+
+
 class AssemblyAISTT:
     def __init__(
         self,
         api_key: Optional[str] = None,
         sample_rate: int = 16000,
         format_turns: bool = True,
+        endpointing: Optional[EndpointingConfig] = None,
         on_speech_start: Optional[Callable[[], None]] = None,
     ):
         """
@@ -36,6 +67,7 @@ class AssemblyAISTT:
             api_key: AssemblyAI API key (defaults to ASSEMBLYAI_API_KEY env var)
             sample_rate: Audio sample rate in Hz
             format_turns: Whether to format turns
+            endpointing: Configuration for turn detection/endpointing behavior
             on_speech_start: Callback when speech is detected (partial transcript received).
                              Useful for implementing barge-in to interrupt TTS.
         """
@@ -45,6 +77,7 @@ class AssemblyAISTT:
 
         self.sample_rate = sample_rate
         self.format_turns = format_turns
+        self.endpointing = endpointing or EndpointingConfig()
         self.on_speech_start = on_speech_start
         self._ws: Optional[WebSocketClientProtocol] = None
         self._connection_signal = asyncio.Event()
@@ -139,12 +172,25 @@ class AssemblyAISTT:
         if self._ws and self._ws.close_code is None:
             return self._ws
 
-        params = urlencode(
-            {
-                "sample_rate": self.sample_rate,
-                "format_turns": str(self.format_turns).lower(),
-            }
-        )
+        # Build query parameters
+        query_params = {
+            "sample_rate": self.sample_rate,
+            "format_turns": str(self.format_turns).lower(),
+        }
+
+        # Add endpointing configuration if provided
+        if self.endpointing.end_of_turn_confidence_threshold is not None:
+            query_params["end_of_turn_confidence_threshold"] = str(
+                self.endpointing.end_of_turn_confidence_threshold
+            )
+        if self.endpointing.min_end_of_turn_silence_when_confident is not None:
+            query_params["min_end_of_turn_silence_when_confident"] = str(
+                self.endpointing.min_end_of_turn_silence_when_confident
+            )
+        if self.endpointing.max_turn_silence is not None:
+            query_params["max_turn_silence"] = str(self.endpointing.max_turn_silence)
+
+        params = urlencode(query_params)
         url = f"wss://streaming.assemblyai.com/v3/ws?{params}"
         self._ws = await websockets.connect(
             url, additional_headers={"Authorization": self.api_key}

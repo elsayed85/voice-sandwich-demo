@@ -23,7 +23,7 @@ import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import { v4 as uuidv4 } from "uuid";
 import { CARTESIA_TTS_SYSTEM_PROMPT, CartesiaTTS } from "./cartesia";
-import { AssemblyAISTT } from "./assemblyai/index";
+import { AssemblyAISTT, type EndpointingConfig } from "./assemblyai/index";
 import type { VoiceAgentEvent } from "./types";
 import { thinkingFillerStream } from "./thinking-filler";
 
@@ -139,6 +139,11 @@ interface STTStreamOptions {
    * Callback when speech is detected (for barge-in support).
    */
   onSpeechStart?: () => void;
+  /**
+   * Endpointing configuration for turn detection.
+   * Controls how aggressively the STT detects end of speech.
+   */
+  endpointing?: EndpointingConfig;
 }
 
 /**
@@ -161,6 +166,7 @@ async function* sttStream(
   const stt = new AssemblyAISTT({
     sampleRate: 16000,
     onSpeechStart: options.onSpeechStart,
+    endpointing: options.endpointing,
   });
   const passthrough = writableIterator<VoiceAgentEvent>();
 
@@ -476,6 +482,17 @@ app.get(
       onSpeechStart: () => {
         console.log("[Pipeline] Speech detected, interrupting TTS (barge-in)");
         tts.interrupt();
+      },
+      // Endpointing configuration - tune these for your use case:
+      // - Lower values = faster responses but may cut off users mid-thought
+      // - Higher values = allows natural pauses but slower responses
+      endpointing: {
+        // Confidence threshold for semantic end-of-turn (0-1). Default: 0.4
+        endOfTurnConfidenceThreshold: 0.5,
+        // Min silence (ms) when confident user finished. Default: 400
+        minEndOfTurnSilenceWhenConfident: 300,
+        // Max silence (ms) before forcing end-of-turn. Default: 1280
+        maxTurnSilence: 1200,
       },
     });
     // STT events -> STT Events + Agent events
