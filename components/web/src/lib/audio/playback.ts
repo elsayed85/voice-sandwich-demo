@@ -4,6 +4,7 @@ const SAMPLE_RATE = 24000;
 export interface AudioPlayback {
   push: (pcmBase64: string) => void;
   stop: () => void;
+  resume: () => void;
   resetScheduling: () => void;
 }
 
@@ -124,11 +125,11 @@ export function createAudioPlayback(): AudioPlayback {
     }
     sourceQueue = [];
     nextPlayTime = 0;
+  }
 
-    // Reset stopped flag after a brief delay to allow new audio
-    setTimeout(() => {
-      isStopped = false;
-    }, 50);
+  function resume(): void {
+    // Allow new audio to be queued again (call when new agent response starts)
+    isStopped = false;
   }
 
   function resetScheduling(): void {
@@ -138,6 +139,7 @@ export function createAudioPlayback(): AudioPlayback {
   return {
     push,
     stop,
+    resume,
     resetScheduling,
   };
 }

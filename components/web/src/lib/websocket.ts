@@ -42,6 +42,9 @@ export function createVoiceSession(): VoiceSession {
       case "stt_output":
         currentTurn.sttEnd(event.ts, event.transcript);
         activities.add("stt", "Transcription", event.transcript);
+        // Resume audio playback for the new agent response
+        // (after barge-in, isStopped blocks old TTS chunks until this point)
+        audioPlayback.resume();
         break;
 
       case "agent_chunk":
@@ -116,6 +119,7 @@ export function createVoiceSession(): VoiceSession {
     activities.clear();
     logs.clear();
     audioPlayback.stop();
+    audioPlayback.resume(); // Ensure ready to receive audio
 
     session.setStatus("connecting");
 
