@@ -240,7 +240,30 @@ class HangUpEvent:
         return cls(type="hang_up", reason=reason, ts=_now_ms())
 
 
-AgentEvent = Union[AgentChunkEvent, AgentEndEvent, ToolCallEvent, ToolResultEvent, HangUpEvent]
+@dataclass
+class InterruptEvent:
+    """
+    Event emitted when the agent encounters an interrupt (HITL - Human In The Loop).
+
+    This signals that the agent needs additional input from the user before
+    continuing. The interrupt message should be spoken via TTS to prompt the user.
+    """
+
+    type: Literal["interrupt"]
+
+    message: str
+    """The interrupt message to display/speak to the user."""
+
+    ts: int
+    """Unix timestamp (milliseconds since epoch) when the event was created."""
+
+    @classmethod
+    def create(cls, message: str) -> "InterruptEvent":
+        """Factory method to create an InterruptEvent event with current timestamp."""
+        return cls(type="interrupt", message=message, ts=_now_ms())
+
+
+AgentEvent = Union[AgentChunkEvent, AgentEndEvent, ToolCallEvent, ToolResultEvent, HangUpEvent, InterruptEvent]
 """
 Union type of all agent-related events.
 
@@ -280,7 +303,7 @@ class TTSChunkEvent:
         return cls(type="tts_chunk", audio=audio, ts=_now_ms())
 
 
-VoiceAgentEvent = Union[UserInputEvent, STTEvent, AgentEvent, TTSChunkEvent, HangUpEvent]
+VoiceAgentEvent = Union[UserInputEvent, STTEvent, AgentEvent, TTSChunkEvent, HangUpEvent, InterruptEvent]
 
 
 def event_to_dict(event: VoiceAgentEvent) -> dict:
@@ -321,6 +344,12 @@ def event_to_dict(event: VoiceAgentEvent) -> dict:
         return {
             "type": event.type,
             "reason": event.reason,
+            "ts": event.ts,
+        }
+    elif isinstance(event, InterruptEvent):
+        return {
+            "type": event.type,
+            "message": event.message,
             "ts": event.ts,
         }
     else:

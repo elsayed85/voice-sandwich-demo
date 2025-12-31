@@ -11,7 +11,7 @@ import { createNodeWebSocket } from "@hono/node-ws";
 import type { WSContext } from "hono/ws";
 import type WebSocket from "ws";
 import { iife, writableIterator } from "./utils";
-import { MemorySaver } from "@langchain/langgraph";
+import { MemorySaver, interrupt, Command } from "@langchain/langgraph";
 import { HumanMessage } from "@langchain/core/messages";
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
@@ -41,7 +41,19 @@ app.use("/*", cors());
 
 const addToOrder = tool(
   async ({ item, quantity }) => {
-    return `Added ${quantity} x ${item} to the order.`;
+    // Demonstrate HITL: if user orders ham, interrupt and ask for alternative
+    let finalItem = item;
+    if (item.toLowerCase() === "ham") {
+      finalItem = interrupt(
+        "Sorry, we're out of ham today. Would you like turkey or roast beef instead?"
+      );
+      if (!["turkey", "roast beef"].includes(finalItem.toLowerCase())) {
+        throw new Error(
+          "Sorry, please choose either turkey or roast beef as the alternative."
+        );
+      }
+    }
+    return `Added ${quantity} x ${finalItem} to the order.`;
   },
   {
     name: "add_to_order",
@@ -176,6 +188,10 @@ async function* sttStream(
  * Tool calls and results are also emitted as separate events.
  * All other upstream events are passed through unchanged.
  *
+ * Supports Human-In-The-Loop (HITL) interrupts. When the agent calls interrupt(),
+ * the interrupt message is emitted as an agent_chunk and the next user input
+ * will resume the graph with the user's response.
+ *
  * @param eventStream - An async iterator of upstream voice agent events
  * @returns Async generator yielding all upstream events plus agent_chunk, tool_call, and tool_result events
  */
@@ -187,16 +203,29 @@ async function* agentStream(
   // using the checkpointer (MemorySaver) configured in the agent
   const threadId = uuidv4();
 
+  // Track if there's a pending interrupt (HITL)
+  let pendingInterrupt: string | undefined;
+
   for await (const event of eventStream) {
     yield event;
     if (event.type === "stt_output") {
-      const stream = await agent.stream(
-        { messages: [new HumanMessage(event.transcript)] },
-        {
-          configurable: { thread_id: threadId },
-          streamMode: "messages",
-        }
-      );
+      // Determine input based on whether we're resuming from an interrupt
+      let input: { messages: HumanMessage[] } | Command;
+
+      if (pendingInterrupt !== undefined) {
+        console.log(
+          `[AgentStream] Resuming from interrupt with user response: "${event.transcript}"`
+        );
+        input = new Command({ resume: event.transcript });
+        pendingInterrupt = undefined;
+      } else {
+        input = { messages: [new HumanMessage(event.transcript)] };
+      }
+
+      const stream = await agent.stream(input, {
+        configurable: { thread_id: threadId },
+        streamMode: "messages",
+      });
 
       for await (const [message] of stream) {
         if (AIMessage.isInstance(message) && message.tool_calls) {
@@ -231,6 +260,47 @@ async function* agentStream(
             yield {
               type: "hang_up",
               reason: result,
+              ts: Date.now(),
+            };
+          }
+        }
+      }
+
+      // Check for interrupts after streaming completes (HITL support)
+      interface StateTask {
+        interrupts?: Array<{ value: unknown }>;
+      }
+      interface GraphState {
+        tasks?: StateTask[];
+      }
+
+      const state = (await agent.getState({
+        configurable: { thread_id: threadId },
+      })) as GraphState;
+
+      if (state.tasks && state.tasks.length > 0) {
+        for (const task of state.tasks) {
+          if (task.interrupts && task.interrupts.length > 0) {
+            const interruptValue = task.interrupts[0].value;
+            const interruptMessage =
+              typeof interruptValue === "string"
+                ? interruptValue
+                : String(interruptValue);
+
+            console.log(`[AgentStream] Interrupt detected: "${interruptMessage}"`);
+            pendingInterrupt = interruptMessage;
+
+            // Emit the interrupt message as an agent_chunk so it goes through TTS
+            yield {
+              type: "agent_chunk",
+              text: interruptMessage,
+              ts: Date.now(),
+            };
+
+            // Also emit an interrupt event for tracking
+            yield {
+              type: "interrupt",
+              message: interruptMessage,
               ts: Date.now(),
             };
           }

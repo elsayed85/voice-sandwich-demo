@@ -12,6 +12,7 @@ from langchain.agents import create_agent
 from langchain.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableGenerator
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import interrupt, Command
 from starlette.staticfiles import StaticFiles
 
 from assemblyai_stt import AssemblyAISTT
@@ -20,6 +21,7 @@ from events import (
     AgentChunkEvent,
     AgentEndEvent,
     HangUpEvent,
+    InterruptEvent,
     ToolCallEvent,
     ToolResultEvent,
     VoiceAgentEvent,
@@ -52,7 +54,17 @@ app.add_middleware(
 
 def add_to_order(item: str, quantity: int) -> str:
     """Add an item to the customer's sandwich order."""
-    return f"Added {quantity} x {item} to the order."
+    # Demonstrate HITL: if user orders ham, interrupt and ask for alternative
+    final_item = item
+    if item.lower() == "ham":
+        final_item = interrupt(
+            "Sorry, we're out of ham today. Would you like turkey or roast beef instead?"
+        )
+        if final_item.lower() not in ["turkey", "roast beef"]:
+            raise ValueError(
+                "Sorry, please choose either turkey or roast beef as the alternative."
+            )
+    return f"Added {quantity} x {final_item} to the order."
 
 
 def confirm_order(order_summary: str) -> str:
@@ -170,9 +182,9 @@ async def _agent_stream(
     Tool calls and results are also emitted as separate events.
     All other upstream events are passed through unchanged.
 
-    The passthrough pattern ensures downstream stages (like TTS) can observe all
-    events in the pipeline, not just the ones this stage produces. This enables
-    features like displaying partial transcripts while the agent is thinking.
+    Supports Human-In-The-Loop (HITL) interrupts. When the agent calls interrupt(),
+    the interrupt message is emitted as an agent_chunk and the next user input
+    will resume the graph with the user's response.
 
     Args:
         event_stream: An async iterator of upstream voice agent events
@@ -185,6 +197,9 @@ async def _agent_stream(
     # using the checkpointer (InMemorySaver) configured in the agent
     thread_id = str(uuid4())
 
+    # Track if there's a pending interrupt (HITL)
+    pending_interrupt: str | None = None
+
     # Process each event as it arrives from the upstream STT stage
     async for event in event_stream:
         # Pass through all events to downstream consumers
@@ -192,17 +207,27 @@ async def _agent_stream(
 
         # When we receive a final transcript, invoke the agent
         if event.type == "stt_output":
+            # Determine input based on whether we're resuming from an interrupt
+            if pending_interrupt is not None:
+                print(
+                    f'[AgentStream] Resuming from interrupt with user response: "{event.transcript}"'
+                )
+                agent_input = Command(resume=event.transcript)
+                pending_interrupt = None
+            else:
+                agent_input = {"messages": [HumanMessage(content=event.transcript)]}
+
             # Stream the agent's response using LangChain's astream method.
             # stream_mode="messages" yields message chunks as they're generated.
             stream = agent.astream(
-                {"messages": [HumanMessage(content=event.transcript)]},
+                agent_input,
                 {"configurable": {"thread_id": thread_id}},
                 stream_mode="messages",
             )
 
             # Iterate through the agent's streaming response. The stream yields
             # tuples of (message, metadata), but we only need the message.
-            async for message, metadata in stream:
+            async for message, _ in stream:
                 # Emit agent chunks (AI messages)
                 if isinstance(message, AIMessage):
                     # Extract and yield the text content from each message chunk
@@ -230,6 +255,28 @@ async def _agent_stream(
                     # Check if this is the hang_up tool - emit hang_up event
                     if tool_name == "hang_up":
                         yield HangUpEvent.create(reason=result)
+
+            # Check for interrupts after streaming completes (HITL support)
+            state = await agent.aget_state({"configurable": {"thread_id": thread_id}})
+
+            if hasattr(state, "tasks") and state.tasks:
+                for task in state.tasks:
+                    if hasattr(task, "interrupts") and task.interrupts:
+                        interrupt_value = task.interrupts[0].value
+                        interrupt_message = (
+                            interrupt_value
+                            if isinstance(interrupt_value, str)
+                            else str(interrupt_value)
+                        )
+
+                        print(f'[AgentStream] Interrupt detected: "{interrupt_message}"')
+                        pending_interrupt = interrupt_message
+
+                        # Emit the interrupt message as an agent_chunk so it goes through TTS
+                        yield AgentChunkEvent.create(interrupt_message)
+
+                        # Also emit an interrupt event for tracking
+                        yield InterruptEvent.create(message=interrupt_message)
 
             # Signal that the agent has finished responding for this turn
             yield AgentEndEvent.create()

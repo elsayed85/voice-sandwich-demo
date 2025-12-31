@@ -175,13 +175,28 @@ export namespace VoiceAgentEvent {
   }
 
   /**
+   * Event emitted when the agent encounters an interrupt (HITL - Human In The Loop).
+   *
+   * This signals that the agent needs additional input from the user before
+   * continuing. The interrupt message should be spoken via TTS to prompt the user.
+   */
+  export interface Interrupt extends BaseEvent {
+    readonly type: "interrupt";
+
+    /**
+     * The interrupt message to display/speak to the user.
+     */
+    message: string;
+  }
+
+  /**
    * Union type of all agent-related events.
    *
    * This type encompasses all events emitted during agent processing, including
    * streaming text chunks, tool invocations, and completion signals. It enables
    * type-safe handling of the various stages of agent response generation.
    */
-  export type AgentEvent = AgentChunk | AgentEnd | ToolCall | ToolResult | HangUp;
+  export type AgentEvent = AgentChunk | AgentEnd | ToolCall | ToolResult | HangUp | Interrupt;
 
   /**
    * Event emitted during text-to-speech synthesis for streaming audio chunks.

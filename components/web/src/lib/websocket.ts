@@ -86,6 +86,11 @@ export function createVoiceSession(): VoiceSession {
         activities.add("agent", "Call Ended", event.reason);
         logs.log(`Agent hung up: ${event.reason}`);
         break;
+
+      case "interrupt":
+        activities.add("agent", "Waiting for Input", event.message);
+        logs.log(`Agent interrupt: ${event.message}`);
+        break;
     }
   }
 
