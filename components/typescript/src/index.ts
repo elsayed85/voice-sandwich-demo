@@ -65,6 +65,24 @@ const confirmOrder = tool(
   }
 );
 
+const hangUp = tool(
+  ({ reason }) => {
+    return `Call ended: ${reason}`;
+  },
+  {
+    name: "hang_up",
+    description:
+      "End the call and hang up the connection. Use this when the conversation has naturally concluded, the customer says goodbye, or explicitly asks to end the call.",
+    schema: z.object({
+      reason: z
+        .string()
+        .describe(
+          "Brief reason for ending the call (e.g., 'Order complete', 'Customer said goodbye')."
+        ),
+    }),
+  }
+);
+
 const systemPrompt = `
 You are a helpful sandwich shop assistant. Your goal is to take the user's order.
 Be concise and friendly.
@@ -73,12 +91,19 @@ Available toppings: lettuce, tomato, onion, pickles, mayo, mustard.
 Available meats: turkey, ham, roast beef.
 Available cheeses: swiss, cheddar, provolone.
 
+IMPORTANT: You MUST call the hang_up tool in these situations:
+- After confirming an order and the customer indicates they're done (says "no" to additional items, says goodbye, etc.)
+- When the customer explicitly says goodbye, thanks you, or indicates the conversation is over
+- When the customer says phrases like "that's it", "that's all", "I'm good", "bye", "thanks", "thank you"
+
+Always call hang_up AFTER giving your final farewell message. Do not just respond with text - you must use the tool to properly end the call.
+
 ${CARTESIA_TTS_SYSTEM_PROMPT}
 `;
 
 const agent = createAgent({
   model: "claude-haiku-4-5",
-  tools: [addToOrder, confirmOrder],
+  tools: [addToOrder, confirmOrder, hangUp],
   checkpointer: new MemorySaver(),
   systemPrompt: systemPrompt,
 });
@@ -186,16 +211,28 @@ async function* agentStream(
           }
         }
         if (ToolMessage.isInstance(message)) {
+          const toolName = message.name ?? "unknown";
+          const result =
+            typeof message.content === "string"
+              ? message.content
+              : JSON.stringify(message.content);
+
           yield {
             type: "tool_result",
             toolCallId: message.tool_call_id ?? "",
-            name: message.name ?? "unknown",
-            result:
-              typeof message.content === "string"
-                ? message.content
-                : JSON.stringify(message.content),
+            name: toolName,
+            result,
             ts: Date.now(),
           };
+
+          // Check if this is the hang_up tool - emit hang_up event
+          if (toolName === "hang_up") {
+            yield {
+              type: "hang_up",
+              reason: result,
+              ts: Date.now(),
+            };
+          }
         }
       }
 
@@ -297,10 +334,30 @@ app.get(
     // STT events + Agent events -> STT Events + Agent Events + TTS events
     const outputEventStream = ttsStream(agentEventStream);
 
+    // Track if a hang_up event was received
+    let pendingHangUp = false;
+
     const flushPromise = iife(async () => {
       // Process all events from the pipeline, sending events back to the client
       for await (const event of outputEventStream) {
         currentSocket?.send(JSON.stringify(event));
+
+        // Check for hang_up event - close connection after TTS completes
+        if (event.type === "hang_up") {
+          console.log(`[WebSocket] Hang up requested: ${event.reason}`);
+          pendingHangUp = true;
+        }
+
+        // When we receive tts_chunk after a hang_up, we're still playing audio
+        // Close the connection after the agent_end event following a hang_up
+        if (pendingHangUp && event.type === "agent_end") {
+          // Give client time to receive and play the final audio
+          setTimeout(() => {
+            console.log("[WebSocket] Closing connection after hang up");
+            inputStream.cancel();
+            currentSocket?.close(1000, "Call ended by agent");
+          }, 2000);
+        }
       }
     });
 

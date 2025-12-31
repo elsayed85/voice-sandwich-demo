@@ -81,6 +81,11 @@ export function createVoiceSession(): VoiceSession {
         }, 300);
         break;
       }
+
+      case "hang_up":
+        activities.add("agent", "Call Ended", event.reason);
+        logs.log(`Agent hung up: ${event.reason}`);
+        break;
     }
   }
 

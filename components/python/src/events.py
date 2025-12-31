@@ -217,7 +217,30 @@ class ToolResultEvent:
         )
 
 
-AgentEvent = Union[AgentChunkEvent, AgentEndEvent, ToolCallEvent, ToolResultEvent]
+@dataclass
+class HangUpEvent:
+    """
+    Event emitted when the agent calls the hang_up tool to end the conversation.
+
+    This signals that the conversation has naturally concluded and the connection
+    should be closed gracefully after any pending TTS audio has finished playing.
+    """
+
+    type: Literal["hang_up"]
+
+    reason: str
+    """Brief reason for ending the call (e.g., 'Order complete', 'Customer said goodbye')."""
+
+    ts: int
+    """Unix timestamp (milliseconds since epoch) when the event was created."""
+
+    @classmethod
+    def create(cls, reason: str) -> "HangUpEvent":
+        """Factory method to create a HangUpEvent event with current timestamp."""
+        return cls(type="hang_up", reason=reason, ts=_now_ms())
+
+
+AgentEvent = Union[AgentChunkEvent, AgentEndEvent, ToolCallEvent, ToolResultEvent, HangUpEvent]
 """
 Union type of all agent-related events.
 
@@ -257,7 +280,7 @@ class TTSChunkEvent:
         return cls(type="tts_chunk", audio=audio, ts=_now_ms())
 
 
-VoiceAgentEvent = Union[UserInputEvent, STTEvent, AgentEvent, TTSChunkEvent]
+VoiceAgentEvent = Union[UserInputEvent, STTEvent, AgentEvent, TTSChunkEvent, HangUpEvent]
 
 
 def event_to_dict(event: VoiceAgentEvent) -> dict:
@@ -292,6 +315,12 @@ def event_to_dict(event: VoiceAgentEvent) -> dict:
         return {
             "type": event.type,
             "audio": base64.b64encode(event.audio).decode("ascii"),
+            "ts": event.ts,
+        }
+    elif isinstance(event, HangUpEvent):
+        return {
+            "type": event.type,
+            "reason": event.reason,
             "ts": event.ts,
         }
     else:

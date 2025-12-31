@@ -19,6 +19,7 @@ from components.python.src.cartesia_tts import CartesiaTTS
 from events import (
     AgentChunkEvent,
     AgentEndEvent,
+    HangUpEvent,
     ToolCallEvent,
     ToolResultEvent,
     VoiceAgentEvent,
@@ -58,6 +59,18 @@ def confirm_order(order_summary: str) -> str:
     return f"Order confirmed: {order_summary}. Sending to kitchen."
 
 
+def hang_up(reason: str) -> str:
+    """End the call and hang up the connection.
+
+    Use this when the conversation has naturally concluded, the customer says goodbye,
+    or explicitly asks to end the call.
+
+    Args:
+        reason: Brief reason for ending the call (e.g., 'Order complete', 'Customer said goodbye').
+    """
+    return f"Call ended: {reason}"
+
+
 system_prompt = """
 You are a helpful sandwich shop assistant. Your goal is to take the user's order.
 Be concise and friendly.
@@ -66,12 +79,19 @@ Available toppings: lettuce, tomato, onion, pickles, mayo, mustard.
 Available meats: turkey, ham, roast beef.
 Available cheeses: swiss, cheddar, provolone.
 
+IMPORTANT: You MUST call the hang_up tool in these situations:
+- After confirming an order and the customer indicates they're done (says "no" to additional items, says goodbye, etc.)
+- When the customer explicitly says goodbye, thanks you, or indicates the conversation is over
+- When the customer says phrases like "that's it", "that's all", "I'm good", "bye", "thanks", "thank you"
+
+Always call hang_up AFTER giving your final farewell message. Do not just respond with text - you must use the tool to properly end the call.
+
 ${CARTESIA_TTS_SYSTEM_PROMPT}
 """
 
 agent = create_agent(
     model="anthropic:claude-haiku-4-5",
-    tools=[add_to_order, confirm_order],
+    tools=[add_to_order, confirm_order, hang_up],
     system_prompt=system_prompt,
     checkpointer=InMemorySaver(),
 )
@@ -197,11 +217,18 @@ async def _agent_stream(
 
                 # Emit tool results (tool messages)
                 if isinstance(message, ToolMessage):
+                    tool_name = getattr(message, "name", "unknown")
+                    result = str(message.content) if message.content else ""
+
                     yield ToolResultEvent.create(
                         tool_call_id=getattr(message, "tool_call_id", ""),
-                        name=getattr(message, "name", "unknown"),
-                        result=str(message.content) if message.content else "",
+                        name=tool_name,
+                        result=result,
                     )
+
+                    # Check if this is the hang_up tool - emit hang_up event
+                    if tool_name == "hang_up":
+                        yield HangUpEvent.create(reason=result)
 
             # Signal that the agent has finished responding for this turn
             yield AgentEndEvent.create()
@@ -287,9 +314,25 @@ async def websocket_endpoint(websocket: WebSocket):
 
     output_stream = pipeline.atransform(websocket_audio_stream())
 
+    # Track if a hang_up event was received
+    pending_hang_up = False
+
     # Process all events from the pipeline, sending events back to the client
     async for event in output_stream:
         await websocket.send_json(event_to_dict(event))
+
+        # Check for hang_up event - close connection after TTS completes
+        if hasattr(event, "type") and event.type == "hang_up":
+            print(f"[WebSocket] Hang up requested: {event.reason}")
+            pending_hang_up = True
+
+        # Close the connection after the agent_end event following a hang_up
+        if pending_hang_up and hasattr(event, "type") and event.type == "agent_end":
+            # Give client time to receive and play the final audio
+            await asyncio.sleep(2)
+            print("[WebSocket] Closing connection after hang up")
+            await websocket.close(1000, "Call ended by agent")
+            break
 
 
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

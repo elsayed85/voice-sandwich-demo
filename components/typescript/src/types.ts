@@ -160,13 +160,28 @@ export namespace VoiceAgentEvent {
   // interface AgentInterrupt extends BaseEvent {}
 
   /**
+   * Event emitted when the agent calls the hang_up tool to end the conversation.
+   *
+   * This signals that the conversation has naturally concluded and the connection
+   * should be closed gracefully after any pending TTS audio has finished playing.
+   */
+  export interface HangUp extends BaseEvent {
+    readonly type: "hang_up";
+
+    /**
+     * Brief reason for ending the call (e.g., 'Order complete', 'Customer said goodbye').
+     */
+    reason: string;
+  }
+
+  /**
    * Union type of all agent-related events.
    *
    * This type encompasses all events emitted during agent processing, including
    * streaming text chunks, tool invocations, and completion signals. It enables
    * type-safe handling of the various stages of agent response generation.
    */
-  export type AgentEvent = AgentChunk | AgentEnd | ToolCall | ToolResult;
+  export type AgentEvent = AgentChunk | AgentEnd | ToolCall | ToolResult | HangUp;
 
   /**
    * Event emitted during text-to-speech synthesis for streaming audio chunks.
@@ -216,4 +231,5 @@ export type VoiceAgentEvent =
   | VoiceAgentEvent.UserInput
   | VoiceAgentEvent.STTEvent
   | VoiceAgentEvent.AgentEvent
-  | VoiceAgentEvent.TTSChunk;
+  | VoiceAgentEvent.TTSChunk
+  | VoiceAgentEvent.HangUp;
