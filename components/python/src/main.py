@@ -25,6 +25,7 @@ from events import (
     VoiceAgentEvent,
     event_to_dict,
 )
+from thinking_filler import thinking_filler_stream
 from utils import merge_async_iters
 
 load_dotenv()
@@ -295,9 +296,27 @@ async def _tts_stream(
         await tts.close()
 
 
+async def _thinking_filler_stream(
+    event_stream: AsyncIterator[VoiceAgentEvent],
+) -> AsyncIterator[VoiceAgentEvent]:
+    """
+    Transform stream: Voice Events → Voice Events (with Filler Phrases)
+
+    Adds "thinking filler" phrases when the agent takes longer than a threshold
+    to respond. This creates a more natural, conversational experience.
+    """
+    async for event in thinking_filler_stream(
+        event_stream,
+        threshold_ms=1200,
+        on_filler_emitted=lambda phrase: print(f'[Pipeline] Filler emitted: "{phrase}"'),
+    ):
+        yield event
+
+
 pipeline = (
     RunnableGenerator(_stt_stream)  # Audio -> STT events
     | RunnableGenerator(_agent_stream)  # STT events -> STT + Agent events
+    | RunnableGenerator(_thinking_filler_stream)  # Add filler phrases when agent is slow
     | RunnableGenerator(_tts_stream)  # STT + Agent events -> All events
 )
 

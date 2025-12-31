@@ -19,6 +19,7 @@ import { v4 as uuidv4 } from "uuid";
 import { CARTESIA_TTS_SYSTEM_PROMPT, CartesiaTTS } from "./cartesia";
 import { AssemblyAISTT } from "./assemblyai/index";
 import type { VoiceAgentEvent } from "./types";
+import { thinkingFillerStream } from "./thinking-filler";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -331,8 +332,15 @@ app.get(
     const transcriptEventStream = sttStream(inputStream);
     // STT events -> STT Events + Agent events
     const agentEventStream = agentStream(transcriptEventStream);
+    // Agent events -> Agent events with filler phrases when agent takes too long
+    const fillerEventStream = thinkingFillerStream(agentEventStream, {
+      thresholdMs: 1200,
+      onFillerEmitted: (phrase) => {
+        console.log(`[Pipeline] Filler emitted: "${phrase}"`);
+      },
+    });
     // STT events + Agent events -> STT Events + Agent Events + TTS events
-    const outputEventStream = ttsStream(agentEventStream);
+    const outputEventStream = ttsStream(fillerEventStream);
 
     // Track if a hang_up event was received
     let pendingHangUp = false;
