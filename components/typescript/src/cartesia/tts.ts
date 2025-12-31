@@ -8,6 +8,8 @@ import type {
 } from "./api-types";
 import type { VoiceAgentEvent } from "../types";
 
+type TTSEvent = VoiceAgentEvent.TTSChunk | VoiceAgentEvent.TTSEnd;
+
 interface CartesiaTTSOptions {
   apiKey?: string;
   voiceId?: string;
@@ -32,7 +34,7 @@ export class CartesiaTTS {
   cartesiaVersion: string;
   onInterrupt?: () => void;
 
-  protected _bufferIterator = writableIterator<VoiceAgentEvent.TTSChunk>();
+  protected _bufferIterator = writableIterator<TTSEvent>();
   protected _connectionPromise: Promise<WebSocket> | null = null;
   protected _contextCounter = 0;
   protected _isInterrupted = false;
@@ -74,7 +76,17 @@ export class CartesiaTTS {
               audio: message.data,
               ts: Date.now(),
             });
-          } else if (message.error) {
+          }
+
+          // Emit tts_end when Cartesia signals synthesis is complete
+          if (message.done || message.type === "done") {
+            this._bufferIterator.push({
+              type: "tts_end",
+              ts: Date.now(),
+            });
+          }
+
+          if (message.error) {
             throw new Error(`Cartesia error: ${message.error}`);
           }
         } catch (error) {
@@ -170,7 +182,7 @@ export class CartesiaTTS {
     }
   }
 
-  async *receiveEvents(): AsyncGenerator<VoiceAgentEvent.TTSChunk> {
+  async *receiveEvents(): AsyncGenerator<TTSEvent> {
     yield* this._bufferIterator;
   }
 

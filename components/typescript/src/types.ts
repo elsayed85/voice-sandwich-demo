@@ -217,6 +217,22 @@ export namespace VoiceAgentEvent {
      */
     audio: string;
   }
+
+  /**
+   * Event emitted when text-to-speech synthesis completes for a turn.
+   *
+   * This signals that all audio for the current agent response has been
+   * generated and sent. Useful for knowing when it's safe to close a
+   * connection after a hang_up event.
+   */
+  export interface TTSEnd extends BaseEvent {
+    readonly type: "tts_end";
+  }
+
+  /**
+   * Union type of all TTS-related events.
+   */
+  export type TTSEvent = TTSChunk | TTSEnd;
 }
 
 /**
@@ -246,5 +262,5 @@ export type VoiceAgentEvent =
   | VoiceAgentEvent.UserInput
   | VoiceAgentEvent.STTEvent
   | VoiceAgentEvent.AgentEvent
-  | VoiceAgentEvent.TTSChunk
+  | VoiceAgentEvent.TTSEvent
   | VoiceAgentEvent.HangUp;

@@ -324,7 +324,31 @@ class TTSChunkEvent:
         return cls(type="tts_chunk", audio=audio, ts=_now_ms())
 
 
-VoiceAgentEvent = Union[UserInputEvent, STTEvent, AgentEvent, TTSChunkEvent, HangUpEvent, InterruptEvent, ClearAudioEvent]
+@dataclass
+class TTSEndEvent:
+    """
+    Event emitted when text-to-speech synthesis completes for a turn.
+
+    This signals that all audio for the current agent response has been
+    generated and sent. Useful for knowing when it's safe to close a
+    connection after a hang_up event.
+    """
+
+    type: Literal["tts_end"]
+
+    ts: int
+    """Unix timestamp (milliseconds since epoch) when the event was created."""
+
+    @classmethod
+    def create(cls) -> "TTSEndEvent":
+        """Factory method to create a TTSEndEvent event with current timestamp."""
+        return cls(type="tts_end", ts=_now_ms())
+
+
+TTSEvent = Union[TTSChunkEvent, TTSEndEvent]
+"""Union type of all TTS-related events."""
+
+VoiceAgentEvent = Union[UserInputEvent, STTEvent, AgentEvent, TTSEvent, HangUpEvent, InterruptEvent, ClearAudioEvent]
 
 
 def event_to_dict(event: VoiceAgentEvent) -> dict:
@@ -359,6 +383,11 @@ def event_to_dict(event: VoiceAgentEvent) -> dict:
         return {
             "type": event.type,
             "audio": base64.b64encode(event.audio).decode("ascii"),
+            "ts": event.ts,
+        }
+    elif isinstance(event, TTSEndEvent):
+        return {
+            "type": event.type,
             "ts": event.ts,
         }
     elif isinstance(event, HangUpEvent):

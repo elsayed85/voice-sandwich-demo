@@ -467,15 +467,14 @@ app.get(
           pendingHangUp = true;
         }
 
-        // When we receive tts_chunk after a hang_up, we're still playing audio
-        // Close the connection after the agent_end event following a hang_up
-        if (pendingHangUp && event.type === "agent_end") {
-          // Give client time to receive and play the final audio
+        // Close the connection after TTS finishes synthesizing the final audio
+        if (pendingHangUp && event.type === "tts_end") {
+          // Give client a brief moment to receive the final audio chunk
           setTimeout(() => {
-            console.log("[WebSocket] Closing connection after hang up");
+            console.log("[WebSocket] Closing connection after final TTS");
             inputStream.cancel();
             currentSocket?.close(1000, "Call ended by agent");
-          }, 2000);
+          }, 500);
         }
       }
     });

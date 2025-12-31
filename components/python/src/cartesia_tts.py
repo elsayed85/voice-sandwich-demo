@@ -19,7 +19,7 @@ from typing import AsyncIterator, Callable, Literal, Optional
 import websockets
 from websockets.client import WebSocketClientProtocol
 
-from events import TTSChunkEvent
+from events import TTSChunkEvent, TTSEndEvent
 
 
 class CartesiaTTS:
@@ -134,7 +134,7 @@ class CartesiaTTS:
         }
         await ws.send(json.dumps(payload))
 
-    async def receive_events(self) -> AsyncIterator[TTSChunkEvent]:
+    async def receive_events(self) -> AsyncIterator[TTSChunkEvent | TTSEndEvent]:
         while not self._close_signal.is_set():
             _, pending = await asyncio.wait(
                 [
@@ -161,7 +161,9 @@ class CartesiaTTS:
                                 audio_chunk = base64.b64decode(message["data"])
                                 if audio_chunk:
                                     yield TTSChunkEvent.create(audio_chunk)
-                            if message.get("done"):
+                            # Emit tts_end when Cartesia signals synthesis is complete
+                            if message.get("done") or message.get("type") == "done":
+                                yield TTSEndEvent.create()
                                 break
                             if "error" in message and message["error"]:
                                 print(f"[DEBUG] Cartesia error: {message['error']}")

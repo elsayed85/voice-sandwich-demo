@@ -448,11 +448,11 @@ async def websocket_endpoint(websocket: WebSocket):
             print(f"[WebSocket] Hang up requested: {event.reason}")
             pending_hang_up = True
 
-        # Close the connection after the agent_end event following a hang_up
-        if pending_hang_up and hasattr(event, "type") and event.type == "agent_end":
-            # Give client time to receive and play the final audio
-            await asyncio.sleep(2)
-            print("[WebSocket] Closing connection after hang up")
+        # Close the connection after TTS finishes synthesizing the final audio
+        if pending_hang_up and hasattr(event, "type") and event.type == "tts_end":
+            # Give client a brief moment to receive the final audio chunk
+            await asyncio.sleep(0.5)
+            print("[WebSocket] Closing connection after final TTS")
             await websocket.close(1000, "Call ended by agent")
             break
 
