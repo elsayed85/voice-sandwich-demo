@@ -48,14 +48,23 @@ const addToOrder = tool(
     // Demonstrate HITL: if user orders ham, interrupt and ask for alternative
     let finalItem = item;
     if (item.toLowerCase().includes("ham")) {
-      finalItem = interrupt(
+      const alternative = interrupt(
         "Sorry, we're out of ham today. Would you like turkey or roast beef instead?"
       );
-      if (!finalItem.toLowerCase().includes("turkey") && !finalItem.toLowerCase().includes("roast beef")) {
+      // Clean up the user's response (remove punctuation, trim whitespace)
+      const cleanedAlternative = String(alternative).replace(/[.,!?]/g, "").trim().toLowerCase();
+
+      if (!cleanedAlternative.includes("turkey") && !cleanedAlternative.includes("roast beef")) {
         throw new Error(
           "Sorry, please choose either turkey or roast beef as the alternative."
         );
       }
+
+      // Determine which meat they chose
+      const chosenMeat = cleanedAlternative.includes("turkey") ? "turkey" : "roast beef";
+
+      // Replace "ham" with the chosen meat in the original item description
+      finalItem = item.toLowerCase().replace(/ham/g, chosenMeat);
     }
     return `Added ${quantity} x ${finalItem} to the order.`;
   },

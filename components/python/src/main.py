@@ -55,16 +55,27 @@ app.add_middleware(
 
 def add_to_order(item: str, quantity: int) -> str:
     """Add an item to the customer's sandwich order."""
+    import re
+
     # Demonstrate HITL: if user orders ham, interrupt and ask for alternative
     final_item = item
     if "ham" in item.lower():
-        final_item = interrupt(
+        alternative = interrupt(
             "Sorry, we're out of ham today. Would you like turkey or roast beef instead?"
         )
-        if "turkey" not in final_item.lower() and "roast beef" not in final_item.lower():
+        # Clean the user's response - remove punctuation and normalize
+        cleaned_alternative = re.sub(r"[.,!?]", "", str(alternative)).strip().lower()
+
+        if "turkey" not in cleaned_alternative and "roast beef" not in cleaned_alternative:
             raise ValueError(
                 "Sorry, please choose either turkey or roast beef as the alternative."
             )
+
+        # Determine which meat they chose and substitute it in the original item
+        chosen_meat = "turkey" if "turkey" in cleaned_alternative else "roast beef"
+        # Replace "ham" with the chosen meat in the original item, preserving the rest
+        final_item = re.sub(r"ham", chosen_meat, item, flags=re.IGNORECASE)
+
     return f"Added {quantity} x {final_item} to the order."
 
 
