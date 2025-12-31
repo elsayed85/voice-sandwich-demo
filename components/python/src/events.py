@@ -263,6 +263,27 @@ class InterruptEvent:
         return cls(type="interrupt", message=message, ts=_now_ms())
 
 
+@dataclass
+class ClearAudioEvent:
+    """
+    Event emitted when audio playback should be cleared (for barge-in support).
+
+    This signals that the user started speaking while the agent was still outputting
+    audio. The client should immediately stop playing any pending audio to allow
+    the user to speak.
+    """
+
+    type: Literal["clear_audio"]
+
+    ts: int
+    """Unix timestamp (milliseconds since epoch) when the event was created."""
+
+    @classmethod
+    def create(cls) -> "ClearAudioEvent":
+        """Factory method to create a ClearAudioEvent event with current timestamp."""
+        return cls(type="clear_audio", ts=_now_ms())
+
+
 AgentEvent = Union[AgentChunkEvent, AgentEndEvent, ToolCallEvent, ToolResultEvent, HangUpEvent, InterruptEvent]
 """
 Union type of all agent-related events.
@@ -303,7 +324,7 @@ class TTSChunkEvent:
         return cls(type="tts_chunk", audio=audio, ts=_now_ms())
 
 
-VoiceAgentEvent = Union[UserInputEvent, STTEvent, AgentEvent, TTSChunkEvent, HangUpEvent, InterruptEvent]
+VoiceAgentEvent = Union[UserInputEvent, STTEvent, AgentEvent, TTSChunkEvent, HangUpEvent, InterruptEvent, ClearAudioEvent]
 
 
 def event_to_dict(event: VoiceAgentEvent) -> dict:
@@ -350,6 +371,11 @@ def event_to_dict(event: VoiceAgentEvent) -> dict:
         return {
             "type": event.type,
             "message": event.message,
+            "ts": event.ts,
+        }
+    elif isinstance(event, ClearAudioEvent):
+        return {
+            "type": event.type,
             "ts": event.ts,
         }
     else:

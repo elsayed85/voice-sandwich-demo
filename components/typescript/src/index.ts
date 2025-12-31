@@ -1,8 +1,14 @@
-import "dotenv/config";
+import dotenv from "dotenv";
 import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
 import { createAgent, AIMessage, ToolMessage } from "langchain";
 import path from "node:path";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Load .env from project root (two levels up from src/)
+dotenv.config({ path: path.resolve(__dirname, "../../../.env") });
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
@@ -21,8 +27,6 @@ import { AssemblyAISTT } from "./assemblyai/index";
 import type { VoiceAgentEvent } from "./types";
 import { thinkingFillerStream } from "./thinking-filler";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 const STATIC_DIR = path.join(__dirname, "../../web/dist");
 const PORT = parseInt(process.env.PORT ?? "8000");
 
@@ -121,6 +125,13 @@ const agent = createAgent({
   systemPrompt: systemPrompt,
 });
 
+interface STTStreamOptions {
+  /**
+   * Callback when speech is detected (for barge-in support).
+   */
+  onSpeechStart?: () => void;
+}
+
 /**
  * Transform stream: Audio (Uint8Array) → Voice Events (VoiceAgentEvent)
  *
@@ -131,12 +142,17 @@ const agent = createAgent({
  * - Consumer: Receives transcription events from AssemblyAI and yields them
  *
  * @param audioStream - Async iterator of PCM audio bytes (16-bit, mono, 16kHz)
+ * @param options - Optional configuration including barge-in callback
  * @returns Async generator yielding STT events (stt_chunk for partials, stt_output for final transcripts)
  */
 async function* sttStream(
-  audioStream: AsyncIterable<Uint8Array>
+  audioStream: AsyncIterable<Uint8Array>,
+  options: STTStreamOptions = {}
 ): AsyncGenerator<VoiceAgentEvent> {
-  const stt = new AssemblyAISTT({ sampleRate: 16000 });
+  const stt = new AssemblyAISTT({
+    sampleRate: 16000,
+    onSpeechStart: options.onSpeechStart,
+  });
   const passthrough = writableIterator<VoiceAgentEvent>();
 
   /**
@@ -313,25 +329,35 @@ async function* agentStream(
   }
 }
 
+interface TTSStreamOptions {
+  /**
+   * Optional TTS instance to use. If not provided, one will be created.
+   * Providing an external instance allows for barge-in interruption.
+   */
+  tts?: CartesiaTTS;
+}
+
 /**
  * Transform stream: Voice Events → Voice Events (with Audio)
  *
  * This function takes a stream of upstream voice agent events and processes them.
- * When agent_chunk events arrive, it sends the text to ElevenLabs for TTS synthesis.
+ * When agent_chunk events arrive, it sends the text to Cartesia for TTS synthesis.
  * Audio is streamed back as tts_chunk events as it's generated.
  * All upstream events are passed through unchanged.
  *
  * It uses a producer-consumer pattern where:
- * - Producer: Reads events from eventStream, passes them through, and sends agent text to ElevenLabs
- * - Consumer: Receives audio chunks from ElevenLabs and yields them as tts_chunk events
+ * - Producer: Reads events from eventStream, passes them through, and sends agent text to Cartesia
+ * - Consumer: Receives audio chunks from Cartesia and yields them as tts_chunk events
  *
  * @param eventStream - An async iterator of upstream voice agent events
+ * @param options - Optional configuration including external TTS instance for barge-in
  * @returns Async generator yielding all upstream events plus tts_chunk events for synthesized audio
  */
 async function* ttsStream(
-  eventStream: AsyncIterable<VoiceAgentEvent>
+  eventStream: AsyncIterable<VoiceAgentEvent>,
+  options: TTSStreamOptions = {}
 ): AsyncGenerator<VoiceAgentEvent> {
-  const tts = new CartesiaTTS({
+  const tts = options.tts ?? new CartesiaTTS({
     voiceId: "f6ff7c0c-e396-40a9-a70b-f7607edb6937",
   });
   const passthrough = writableIterator<VoiceAgentEvent>();
@@ -397,9 +423,24 @@ app.get(
     // Create a writable stream for incoming WebSocket audio data
     const inputStream = writableIterator<Uint8Array>();
 
+    // Create TTS instance for barge-in support (can be interrupted)
+    const tts = new CartesiaTTS({
+      voiceId: "f6ff7c0c-e396-40a9-a70b-f7607edb6937",
+      onInterrupt: () => {
+        console.log("[Pipeline] TTS interrupted (barge-in)");
+        // Notify client to clear audio buffer
+        currentSocket?.send(JSON.stringify({ type: "clear_audio", ts: Date.now() }));
+      },
+    });
+
     // Define the voice processing pipeline as a chain of async generators
-    // Audio -> STT events
-    const transcriptEventStream = sttStream(inputStream);
+    // Audio -> STT events (with barge-in callback to interrupt TTS)
+    const transcriptEventStream = sttStream(inputStream, {
+      onSpeechStart: () => {
+        console.log("[Pipeline] Speech detected, interrupting TTS (barge-in)");
+        tts.interrupt();
+      },
+    });
     // STT events -> STT Events + Agent events
     const agentEventStream = agentStream(transcriptEventStream);
     // Agent events -> Agent events with filler phrases when agent takes too long
@@ -410,7 +451,7 @@ app.get(
       },
     });
     // STT events + Agent events -> STT Events + Agent Events + TTS events
-    const outputEventStream = ttsStream(fillerEventStream);
+    const outputEventStream = ttsStream(fillerEventStream, { tts });
 
     // Track if a hang_up event was received
     let pendingHangUp = false;

@@ -16,6 +16,10 @@ interface CartesiaTTSOptions {
   encoding?: CartesiaOutputFormat["encoding"];
   language?: string;
   cartesiaVersion?: string;
+  /**
+   * Callback called when TTS output is interrupted (for barge-in).
+   */
+  onInterrupt?: () => void;
 }
 
 export class CartesiaTTS {
@@ -26,10 +30,12 @@ export class CartesiaTTS {
   encoding: CartesiaOutputFormat["encoding"];
   language: string;
   cartesiaVersion: string;
+  onInterrupt?: () => void;
 
   protected _bufferIterator = writableIterator<VoiceAgentEvent.TTSChunk>();
   protected _connectionPromise: Promise<WebSocket> | null = null;
   protected _contextCounter = 0;
+  protected _isInterrupted = false;
 
   /**
    * Generate a valid context_id for Cartesia.
@@ -101,6 +107,37 @@ export class CartesiaTTS {
     this.encoding = options.encoding ?? "pcm_s16le";
     this.language = options.language ?? "en";
     this.cartesiaVersion = options.cartesiaVersion ?? "2025-04-16";
+    this.onInterrupt = options.onInterrupt;
+  }
+
+  /**
+   * Interrupt the current TTS output (for barge-in support).
+   * Closes the connection to stop audio generation and clears any pending audio.
+   */
+  async interrupt(): Promise<void> {
+    if (this._isInterrupted) return;
+
+    console.log("[CartesiaTTS] Interrupted by user (barge-in)");
+    this._isInterrupted = true;
+
+    // Close connection to stop audio generation
+    if (this._connectionPromise) {
+      try {
+        const ws = await this._connectionPromise;
+        ws.close();
+      } catch {
+        // Ignore close errors
+      }
+      this._connectionPromise = null;
+    }
+
+    // Call the onInterrupt callback
+    this.onInterrupt?.();
+
+    // Reset interrupted state after a brief delay to allow new input
+    setTimeout(() => {
+      this._isInterrupted = false;
+    }, 100);
   }
 
   async sendText(text: string): Promise<void> {

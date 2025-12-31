@@ -7,15 +7,24 @@ interface AssemblyAISTTOptions {
   apiKey?: string;
   sampleRate?: number;
   formatTurns?: boolean;
+  /**
+   * Callback when speech is detected (partial transcript received).
+   * Useful for implementing barge-in to interrupt TTS.
+   */
+  onSpeechStart?: () => void;
 }
 
 export class AssemblyAISTT {
   apiKey: string;
   sampleRate: number;
   formatTurns: boolean;
+  onSpeechStart?: () => void;
 
   protected _bufferIterator = writableIterator<VoiceAgentEvent.STTEvent>();
   protected _connectionPromise: Promise<WebSocket> | null = null;
+  // Track if we've already signaled speech start for current utterance
+  protected _speechStartSignaled = false;
+
   protected get _connection(): Promise<WebSocket> {
     if (this._connectionPromise) {
       return this._connectionPromise;
@@ -46,8 +55,15 @@ export class AssemblyAISTT {
               if (message.transcript) {
                 this._bufferIterator.push({ type: "stt_output", transcript: message.transcript, ts: Date.now() });
               }
+              // Reset speech start flag for next utterance
+              this._speechStartSignaled = false;
             } else {
               this._bufferIterator.push({ type: "stt_chunk", transcript: message.transcript, ts: Date.now() });
+              // Signal speech start for barge-in (only once per utterance)
+              if (!this._speechStartSignaled && message.transcript?.trim().length > 0) {
+                this._speechStartSignaled = true;
+                this.onSpeechStart?.();
+              }
             }
           } else if (message.type === "Termination") {
             // no-op
@@ -77,6 +93,7 @@ export class AssemblyAISTT {
     this.apiKey = options.apiKey || process.env.ASSEMBLYAI_API_KEY || "";
     this.sampleRate = options.sampleRate || 16000;
     this.formatTurns = options.formatTurns || true;
+    this.onSpeechStart = options.onSpeechStart;
 
     if (!this.apiKey) {
       throw new Error("AssemblyAI API key is required");

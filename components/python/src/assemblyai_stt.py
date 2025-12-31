@@ -12,7 +12,7 @@ import asyncio
 import contextlib
 import json
 import os
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator, Callable, Optional
 from urllib.parse import urlencode
 
 import websockets
@@ -27,16 +27,30 @@ class AssemblyAISTT:
         api_key: Optional[str] = None,
         sample_rate: int = 16000,
         format_turns: bool = True,
+        on_speech_start: Optional[Callable[[], None]] = None,
     ):
+        """
+        Initialize AssemblyAI STT.
+
+        Args:
+            api_key: AssemblyAI API key (defaults to ASSEMBLYAI_API_KEY env var)
+            sample_rate: Audio sample rate in Hz
+            format_turns: Whether to format turns
+            on_speech_start: Callback when speech is detected (partial transcript received).
+                             Useful for implementing barge-in to interrupt TTS.
+        """
         self.api_key = api_key or os.getenv("ASSEMBLYAI_API_KEY")
         if not self.api_key:
             raise ValueError("AssemblyAI API key is required")
 
         self.sample_rate = sample_rate
         self.format_turns = format_turns
+        self.on_speech_start = on_speech_start
         self._ws: Optional[WebSocketClientProtocol] = None
         self._connection_signal = asyncio.Event()
         self._close_signal = asyncio.Event()
+        # Track if we've already signaled speech start for current utterance
+        self._speech_start_signaled = False
 
     async def receive_events(self) -> AsyncIterator[STTEvent]:
         while not self._close_signal.is_set():
@@ -74,8 +88,19 @@ class AssemblyAISTT:
                                 if turn_is_formatted:
                                     if transcript:
                                         yield STTOutputEvent.create(transcript)
+                                    # Reset speech start flag for next utterance
+                                    self._speech_start_signaled = False
                                 else:
                                     yield STTChunkEvent.create(transcript)
+                                    # Signal speech start for barge-in (only once per utterance)
+                                    if (
+                                        not self._speech_start_signaled
+                                        and transcript
+                                        and transcript.strip()
+                                    ):
+                                        self._speech_start_signaled = True
+                                        if self.on_speech_start:
+                                            self.on_speech_start()
 
                             elif message_type == "Termination":
                                 # no-op

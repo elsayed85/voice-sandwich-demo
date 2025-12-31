@@ -12,7 +12,8 @@ export type ServerEvent =
   | { type: "tool_result"; ts: number; name: string; result: string }
   | { type: "tts_chunk"; audio: string; ts: number }
   | { type: "hang_up"; ts: number; reason: string }
-  | { type: "interrupt"; ts: number; message: string };
+  | { type: "interrupt"; ts: number; message: string }
+  | { type: "clear_audio"; ts: number };
 
 // Session state
 export interface SessionState {

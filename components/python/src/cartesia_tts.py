@@ -14,7 +14,7 @@ import contextlib
 import json
 import os
 import time
-from typing import AsyncIterator, Literal, Optional
+from typing import AsyncIterator, Callable, Literal, Optional
 
 import websockets
 from websockets.client import WebSocketClientProtocol
@@ -26,6 +26,7 @@ class CartesiaTTS:
     _ws: Optional[WebSocketClientProtocol]
     _connection_signal: asyncio.Event
     _close_signal: asyncio.Event
+    _is_interrupted: bool
 
     def __init__(
         self,
@@ -38,7 +39,21 @@ class CartesiaTTS:
         ] = "pcm_s16le",
         language: str = "en",
         cartesia_version: str = "2025-04-16",
+        on_interrupt: Optional[Callable[[], None]] = None,
     ):
+        """
+        Initialize Cartesia TTS.
+
+        Args:
+            api_key: Cartesia API key (defaults to CARTESIA_API_KEY env var)
+            voice_id: Cartesia voice ID
+            model_id: Cartesia model ID
+            sample_rate: Audio sample rate in Hz
+            encoding: Audio encoding format
+            language: Language code
+            cartesia_version: API version
+            on_interrupt: Callback called when TTS output is interrupted (for barge-in).
+        """
         self.api_key = api_key or os.getenv("CARTESIA_API_KEY")
         if not self.api_key:
             raise ValueError("Cartesia API key is required")
@@ -49,10 +64,12 @@ class CartesiaTTS:
         self.encoding = encoding
         self.language = language
         self.cartesia_version = cartesia_version
+        self.on_interrupt = on_interrupt
         self._ws = None
         self._connection_signal = asyncio.Event()
         self._close_signal = asyncio.Event()
         self._context_counter = 0
+        self._is_interrupted = False
 
     def _generate_context_id(self) -> str:
         """
@@ -63,6 +80,33 @@ class CartesiaTTS:
         counter = self._context_counter
         self._context_counter += 1
         return f"ctx_{timestamp}_{counter}"
+
+    async def interrupt(self) -> None:
+        """
+        Interrupt the current TTS output (for barge-in support).
+        Closes the connection to stop audio generation and clears any pending audio.
+        """
+        if self._is_interrupted:
+            return
+
+        print("[CartesiaTTS] Interrupted by user (barge-in)")
+        self._is_interrupted = True
+
+        # Close connection to stop audio generation
+        if self._ws and self._ws.close_code is None:
+            try:
+                await self._ws.close()
+            except Exception:
+                pass  # Ignore close errors
+            self._ws = None
+
+        # Call the on_interrupt callback
+        if self.on_interrupt:
+            self.on_interrupt()
+
+        # Reset interrupted state after a brief delay to allow new input
+        await asyncio.sleep(0.1)
+        self._is_interrupted = False
 
     async def send_text(self, text: Optional[str]) -> None:
         if text is None:

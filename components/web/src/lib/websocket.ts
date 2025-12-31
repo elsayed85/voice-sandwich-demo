@@ -91,6 +91,12 @@ export function createVoiceSession(): VoiceSession {
         activities.add("agent", "Waiting for Input", event.message);
         logs.log(`Agent interrupt: ${event.message}`);
         break;
+
+      case "clear_audio":
+        // Barge-in: user started speaking, clear any pending audio
+        audioPlayback.stop();
+        logs.log("Audio cleared (barge-in)");
+        break;
     }
   }
 
