@@ -57,11 +57,11 @@ def add_to_order(item: str, quantity: int) -> str:
     """Add an item to the customer's sandwich order."""
     # Demonstrate HITL: if user orders ham, interrupt and ask for alternative
     final_item = item
-    if item.lower() == "ham":
+    if "ham" in item.lower():
         final_item = interrupt(
             "Sorry, we're out of ham today. Would you like turkey or roast beef instead?"
         )
-        if final_item.lower() not in ["turkey", "roast beef"]:
+        if "turkey" not in final_item.lower() and "roast beef" not in final_item.lower():
             raise ValueError(
                 "Sorry, please choose either turkey or roast beef as the alternative."
             )

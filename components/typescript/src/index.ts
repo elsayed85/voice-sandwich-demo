@@ -47,11 +47,11 @@ const addToOrder = tool(
   async ({ item, quantity }) => {
     // Demonstrate HITL: if user orders ham, interrupt and ask for alternative
     let finalItem = item;
-    if (item.toLowerCase() === "ham") {
+    if (item.toLowerCase().includes("ham")) {
       finalItem = interrupt(
         "Sorry, we're out of ham today. Would you like turkey or roast beef instead?"
       );
-      if (!["turkey", "roast beef"].includes(finalItem.toLowerCase())) {
+      if (!finalItem.toLowerCase().includes("turkey") && !finalItem.toLowerCase().includes("roast beef")) {
         throw new Error(
           "Sorry, please choose either turkey or roast beef as the alternative."
         );
@@ -248,17 +248,24 @@ async function* agentStream(
         });
 
         for await (const [message] of stream) {
-          if (AIMessage.isInstance(message) && message.tool_calls) {
-            yield { type: "agent_chunk", text: message.text, ts: Date.now() };
-            for (const toolCall of message.tool_calls) {
-              console.log(`[AgentStream] Tool call: ${toolCall.name}`);
-              yield {
-                type: "tool_call",
-                id: toolCall.id ?? uuidv4(),
-                name: toolCall.name,
-                args: toolCall.args,
-                ts: Date.now(),
-              };
+          if (AIMessage.isInstance(message)) {
+            // Always emit agent_chunk for AI messages with text content
+            if (message.text) {
+              console.log(`[AgentStream] AI response: "${message.text.substring(0, 50)}..."`);
+              yield { type: "agent_chunk", text: message.text, ts: Date.now() };
+            }
+            // Emit tool calls if present
+            if (message.tool_calls && message.tool_calls.length > 0) {
+              for (const toolCall of message.tool_calls) {
+                console.log(`[AgentStream] Tool call: ${toolCall.name}`);
+                yield {
+                  type: "tool_call",
+                  id: toolCall.id ?? uuidv4(),
+                  name: toolCall.name,
+                  args: toolCall.args,
+                  ts: Date.now(),
+                };
+              }
             }
           }
           if (ToolMessage.isInstance(message)) {
