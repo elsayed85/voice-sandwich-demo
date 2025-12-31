@@ -225,6 +225,8 @@ async function* agentStream(
   for await (const event of eventStream) {
     yield event;
     if (event.type === "stt_output") {
+      console.log(`[AgentStream] Processing transcript: "${event.transcript}"`);
+
       // Determine input based on whether we're resuming from an interrupt
       let input: { messages: HumanMessage[] } | Command;
 
@@ -235,96 +237,115 @@ async function* agentStream(
         input = new Command({ resume: event.transcript });
         pendingInterrupt = undefined;
       } else {
+        console.log(`[AgentStream] Sending new message to agent`);
         input = { messages: [new HumanMessage(event.transcript)] };
       }
 
-      const stream = await agent.stream(input, {
-        configurable: { thread_id: threadId },
-        streamMode: "messages",
-      });
+      try {
+        const stream = await agent.stream(input, {
+          configurable: { thread_id: threadId },
+          streamMode: "messages",
+        });
 
-      for await (const [message] of stream) {
-        if (AIMessage.isInstance(message) && message.tool_calls) {
-          yield { type: "agent_chunk", text: message.text, ts: Date.now() };
-          for (const toolCall of message.tool_calls) {
+        for await (const [message] of stream) {
+          if (AIMessage.isInstance(message) && message.tool_calls) {
+            yield { type: "agent_chunk", text: message.text, ts: Date.now() };
+            for (const toolCall of message.tool_calls) {
+              console.log(`[AgentStream] Tool call: ${toolCall.name}`);
+              yield {
+                type: "tool_call",
+                id: toolCall.id ?? uuidv4(),
+                name: toolCall.name,
+                args: toolCall.args,
+                ts: Date.now(),
+              };
+            }
+          }
+          if (ToolMessage.isInstance(message)) {
+            const toolName = message.name ?? "unknown";
+            const result =
+              typeof message.content === "string"
+                ? message.content
+                : JSON.stringify(message.content);
+
+            console.log(`[AgentStream] Tool result: ${toolName} -> ${result.substring(0, 100)}`);
             yield {
-              type: "tool_call",
-              id: toolCall.id ?? uuidv4(),
-              name: toolCall.name,
-              args: toolCall.args,
+              type: "tool_result",
+              toolCallId: message.tool_call_id ?? "",
+              name: toolName,
+              result,
               ts: Date.now(),
             };
+
+            // Check if this is the hang_up tool - emit hang_up event
+            if (toolName === "hang_up") {
+              yield {
+                type: "hang_up",
+                reason: result,
+                ts: Date.now(),
+              };
+            }
           }
         }
-        if (ToolMessage.isInstance(message)) {
-          const toolName = message.name ?? "unknown";
-          const result =
-            typeof message.content === "string"
-              ? message.content
-              : JSON.stringify(message.content);
 
-          yield {
-            type: "tool_result",
-            toolCallId: message.tool_call_id ?? "",
-            name: toolName,
-            result,
-            ts: Date.now(),
-          };
+        console.log(`[AgentStream] Agent stream completed, checking for interrupts...`);
 
-          // Check if this is the hang_up tool - emit hang_up event
-          if (toolName === "hang_up") {
-            yield {
-              type: "hang_up",
-              reason: result,
-              ts: Date.now(),
-            };
+        // Check for interrupts after streaming completes (HITL support)
+        interface StateTask {
+          interrupts?: Array<{ value: unknown }>;
+        }
+        interface GraphState {
+          tasks?: StateTask[];
+        }
+
+        const state = (await agent.getState({
+          configurable: { thread_id: threadId },
+        })) as GraphState;
+
+        console.log(`[AgentStream] State tasks: ${state.tasks?.length ?? 0}`);
+
+        if (state.tasks && state.tasks.length > 0) {
+          for (const task of state.tasks) {
+            if (task.interrupts && task.interrupts.length > 0) {
+              const interruptValue = task.interrupts[0].value;
+              const interruptMessage =
+                typeof interruptValue === "string"
+                  ? interruptValue
+                  : String(interruptValue);
+
+              console.log(`[AgentStream] Interrupt detected: "${interruptMessage}"`);
+              pendingInterrupt = interruptMessage;
+
+              // Emit the interrupt message as an agent_chunk so it goes through TTS
+              yield {
+                type: "agent_chunk",
+                text: interruptMessage,
+                ts: Date.now(),
+              };
+
+              // Also emit an interrupt event for tracking
+              yield {
+                type: "interrupt",
+                message: interruptMessage,
+                ts: Date.now(),
+              };
+            }
           }
         }
+
+        // Signal that the agent has finished responding for this turn
+        console.log(`[AgentStream] Emitting agent_end`);
+        yield { type: "agent_end", ts: Date.now() };
+      } catch (error) {
+        console.error(`[AgentStream] Error processing agent:`, error);
+        // Emit an error response so the user knows something went wrong
+        yield {
+          type: "agent_chunk",
+          text: "I'm sorry, I encountered an error. Could you please repeat that?",
+          ts: Date.now(),
+        };
+        yield { type: "agent_end", ts: Date.now() };
       }
-
-      // Check for interrupts after streaming completes (HITL support)
-      interface StateTask {
-        interrupts?: Array<{ value: unknown }>;
-      }
-      interface GraphState {
-        tasks?: StateTask[];
-      }
-
-      const state = (await agent.getState({
-        configurable: { thread_id: threadId },
-      })) as GraphState;
-
-      if (state.tasks && state.tasks.length > 0) {
-        for (const task of state.tasks) {
-          if (task.interrupts && task.interrupts.length > 0) {
-            const interruptValue = task.interrupts[0].value;
-            const interruptMessage =
-              typeof interruptValue === "string"
-                ? interruptValue
-                : String(interruptValue);
-
-            console.log(`[AgentStream] Interrupt detected: "${interruptMessage}"`);
-            pendingInterrupt = interruptMessage;
-
-            // Emit the interrupt message as an agent_chunk so it goes through TTS
-            yield {
-              type: "agent_chunk",
-              text: interruptMessage,
-              ts: Date.now(),
-            };
-
-            // Also emit an interrupt event for tracking
-            yield {
-              type: "interrupt",
-              message: interruptMessage,
-              ts: Date.now(),
-            };
-          }
-        }
-      }
-
-      // Signal that the agent has finished responding for this turn
-      yield { type: "agent_end", ts: Date.now() };
     }
   }
 }
