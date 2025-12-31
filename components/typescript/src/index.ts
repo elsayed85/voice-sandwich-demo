@@ -481,6 +481,9 @@ app.get(
     const transcriptEventStream = sttStream(inputStream, {
       onSpeechStart: () => {
         console.log("[Pipeline] Speech detected, interrupting TTS (barge-in)");
+        // Send clear_audio IMMEDIATELY to stop client playback
+        // This must happen before tts.interrupt() which is async
+        currentSocket?.send(JSON.stringify({ type: "clear_audio", ts: Date.now() }));
         tts.interrupt();
       },
       // Endpointing configuration - tune these for your use case:

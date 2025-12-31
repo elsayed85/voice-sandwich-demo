@@ -1,4 +1,4 @@
-// Sample rate of audio from ElevenLabs (pcm_24000 format)
+// Sample rate of audio from Cartesia TTS (PCM 24kHz)
 const SAMPLE_RATE = 24000;
 
 export interface AudioPlayback {
@@ -13,6 +13,7 @@ export function createAudioPlayback(): AudioPlayback {
   let sourceQueue: AudioBufferSourceNode[] = [];
   let base64Queue: string[] = [];
   let isProcessing = false;
+  let isStopped = false;
 
   function ensureContext(): AudioContext {
     if (!audioContext) {
@@ -99,22 +100,35 @@ export function createAudioPlayback(): AudioPlayback {
   }
 
   function push(pcmBase64: string): void {
+    // Don't queue new audio if stopped (barge-in active)
+    if (isStopped) return;
     base64Queue.push(pcmBase64);
     processQueue();
   }
 
   function stop(): void {
+    // Mark as stopped to prevent new audio from being queued
+    isStopped = true;
+
+    // Clear pending audio
     base64Queue = [];
 
+    // Stop and disconnect all playing sources
     for (const source of sourceQueue) {
       try {
-        source.stop();
+        source.disconnect();
+        source.stop(0); // Stop immediately
       } catch {
         // Ignore if already stopped
       }
     }
     sourceQueue = [];
     nextPlayTime = 0;
+
+    // Reset stopped flag after a brief delay to allow new audio
+    setTimeout(() => {
+      isStopped = false;
+    }, 50);
   }
 
   function resetScheduling(): void {
